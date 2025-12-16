@@ -1,0 +1,55 @@
+import argparse
+import base64
+import csv
+import json
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+
+def auth_header(user, pwd):
+    token = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+    return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
+
+def post(url, headers, payload):
+    data = json.dumps(payload).encode()
+    req = Request(url, data=data, headers=headers)
+    with urlopen(req) as r:
+        return json.loads(r.read().decode())
+
+def main():
+    parser = argparse.ArgumentParser(description="Nutanix Remote Network Audit")
+    parser.add_argument("--prism", required=True, help="Prism IP or hostname")
+    parser.add_argument("--user", required=True, help="Username")
+    parser.add_argument("--password", required=True, help="Password")
+    parser.add_argument("--out", default="network_audit.csv")
+    args = parser.parse_args()
+
+    base = f"https://{args.prism}:9440/api/nutanix/v3"
+    headers = auth_header(args.user, args.password)
+
+    print("Connecting to Nutanix Prism...")
+
+    # Get VMs
+    vms = post(f"{base}/vms/list", headers, {"kind": "vm", "length": 100})
+    rows = []
+
+    for vm in vms.get("entities", []):
+        name = vm["spec"]["name"]
+        nics = vm["spec"]["resources"].get("nic_list", [])
+
+        for idx, nic in enumerate(nics):
+            rows.append({
+                "vm_name": name,
+                "nic_index": idx,
+                "mac": nic.get("mac_address", ""),
+                "subnet_uuid": nic.get("subnet_reference", {}).get("uuid", "")
+            })
+
+    with open(args.out, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"Report saved to {args.out}")
+
+if __name__ == "__main__":
+    main()
